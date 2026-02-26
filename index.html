@@ -1,9 +1,21 @@
+
 <!DOCTYPE html>
 <html lang="es">
 <head>
+  <link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#000000">
+<link rel="apple-touch-icon" href="icon-192.png">
+
+<script>
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('sw.js')
+      .then(() => console.log("¡Termómetro listo!"))
+      .catch(err => console.log("Error de registro", err));
+  }
+</script>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Termómetro de Progreso</title>
+  <title>Panel de Deudas</title>
   <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@700&family=Open+Sans&display=swap" rel="stylesheet">
   <style>
     body {
@@ -12,11 +24,27 @@
       font-family: 'Open Sans', sans-serif;
       text-align: center;
       padding: 40px;
+      overflow-x: hidden;
     }
     h1 {
       font-family: 'Montserrat', sans-serif;
       font-size: 2em;
       margin-bottom: 20px;
+    }
+    .deuda-container {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 40px;
+      margin-top: 30px;
+    }
+    .deuda {
+      position: relative;
+      width: 220px;
+      text-align: center;
+      background-color: rgba(255,255,255,0.05);
+      padding: 20px;
+      border-radius: 10px;
     }
     .thermometer {
       position: relative;
@@ -26,6 +54,7 @@
       border-radius: 50px;
       margin: 0 auto;
       overflow: hidden;
+      transition: transform 1s ease-in-out;
     }
     .fill {
       position: absolute;
@@ -36,8 +65,8 @@
       transition: height 0.5s ease;
     }
     .goal {
-      margin-top: 20px;
-      font-size: 1.2em;
+      margin-top: 10px;
+      font-size: 1em;
     }
     .input-section {
       margin-top: 30px;
@@ -59,48 +88,271 @@
       cursor: pointer;
       margin-left: 10px;
     }
-    .message {
-      margin-top: 20px;
-      font-style: italic;
+    .nombre-deuda {
+      margin-top: 10px;
+      font-weight: bold;
+      font-family: 'Montserrat', sans-serif;
+      transition: transform 1s ease, opacity 1s ease;
+    }
+    .nombre-destruido {
+      transform: scale(0.5) rotate(45deg);
+      opacity: 0;
+      color: gray;
+    }
+    .felicitaciones {
+      display: none;
+      font-family: 'Montserrat', sans-serif;
+      font-size: 1.5em;
       color: #ffd700;
+      margin-top: 20px;
+      animation: pop 1s ease-in-out;
+    }
+    @keyframes pop {
+      0% { transform: scale(0); opacity: 0; }
+      50% { transform: scale(1.2); opacity: 1; }
+      100% { transform: scale(1); }
+    }
+    canvas {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+      z-index: 999;
+      opacity: 1;
+      transition: opacity 3s ease;
+    }
+    .historial {
+      margin-top: 15px;
+      font-size: 0.9em;
+      text-align: left;
+      background-color: rgba(255,255,255,0.1);
+      padding: 10px;
+      border-radius: 5px;
+      max-height: 150px;
+      overflow-y: auto;
+    }
+    .historial h4 {
+      margin: 0 0 5px 0;
+      font-family: 'Montserrat', sans-serif;
+      font-size: 1em;
+      color: #ffd700;
+    }
+    .historial-entry {
+      margin-bottom: 5px;
+      border-bottom: 1px solid rgba(255,255,255,0.1);
+      padding-bottom: 3px;
+    }
+    #deudasSuperadas {
+      display: none;
+      margin-top: 40px;
+      background-color: rgba(255,255,255,0.05);
+      padding: 20px;
+      border-radius: 10px;
+    }
+    #deudasSuperadas h2 {
+      color: #ffd700;
+      font-family: 'Montserrat', sans-serif;
+    }
+    .deuda-superada {
+      margin: 10px 0;
+      border-bottom: 1px solid rgba(255,255,255,0.1);
+      padding-bottom: 5px;
     }
   </style>
 </head>
 <body>
-  <h1>Progreso hacia tu libertad financiera</h1>
-  <div class="thermometer">
-    <div class="fill" id="fill"></div>
-  </div>
-  <div class="goal" id="goalText">0% completado - $0 de $76,000</div>
+  <h1>Panel de Deudas</h1>
 
   <div class="input-section">
-    <input type="number" id="abono" placeholder="Ingresa abono ($)">
-    <button onclick="registrarAbono()">Registrar Abono</button>
+    <input type="text" id="nombreDeuda" placeholder="Nombre de la deuda">
+    <input type="number" id="metaDeuda" placeholder="Meta ($)">
+    <button onclick="agregarDeuda()">Agregar Termómetro</button>
+    <button onclick="mostrarDeudasSuperadas()">Ver Deudas Superadas</button>
   </div>
 
-  <div class="message">Cada vez que abones a capital, colorea un segmento. ¡Siente la victoria de estar más cerca de tu libertad!</div>
+  <div class="deuda-container" id="deudaContainer"></div>
+
+  <div id="deudasSuperadas">
+    <h2>Deudas Superadas</h2>
+    <div id="listaSuperadas"></div>
+  </div>
+
+  <canvas id="confetti"></canvas>
 
   <script>
-    const meta = 76000;
-    let totalAbonado = parseFloat(localStorage.getItem('totalAbonado')) || 0;
+    const deudaContainer = document.getElementById('deudaContainer');
+    const canvas = document.getElementById('confetti');
+    const ctx = canvas.getContext('2d');
+    const listaSuperadas = document.getElementById('listaSuperadas');
+    const seccionSuperadas = document.getElementById('deudasSuperadas');
+    let confettis = [];
+    let confetiActivo = false;
 
-    function actualizarTermometro() {
-      const porcentaje = Math.min((totalAbonado / meta) * 100, 100);
-      document.getElementById('fill').style.height = porcentaje + '%';
-      document.getElementById('goalText').textContent = `${porcentaje.toFixed(1)}% completado - $${totalAbonado.toLocaleString()} de $${meta.toLocaleString()}`;
+    function resizeCanvas() {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
     }
+    window.addEventListener('resize', resizeCanvas);
+    resizeCanvas();
 
-    function registrarAbono() {
-      const abono = parseFloat(document.getElementById('abono').value);
-      if (!isNaN(abono) && abono > 0) {
-        totalAbonado += abono;
-        localStorage.setItem('totalAbonado', totalAbonado);
-        actualizarTermometro();
-        document.getElementById('abono').value = '';
+    function crearConfeti() {
+      confettis = [];
+      for (let i = 0; i < 200; i++) {
+        confettis.push({
+          x: Math.random() * canvas.width,
+          y: Math.random() * canvas.height - canvas.height,
+          r: Math.random() * 6 + 2,
+          d: Math.random() * 10 + 5,
+          color: `hsl(${Math.random() * 360}, 100%, 50%)`,
+          tilt: Math.random() * 10 - 10,
+          opacity: 1
+        });
       }
     }
 
-    actualizarTermometro();
+    function dibujarConfeti() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      confettis.forEach(c => {
+        ctx.globalAlpha = c.opacity;
+        ctx.fillStyle = c.color;
+        ctx.fillRect(c.x, c.y, c.r, c.r);
+      });
+      ctx.globalAlpha = 1;
+      actualizarConfeti();
+    }
+
+    function actualizarConfeti() {
+      confettis.forEach(c => {
+        c.y += Math.cos(c.d) + 1 + c.r / 2;
+        c.x += Math.sin(c.d);
+        c.opacity -= 0.002;
+        if (c.y > canvas.height || c.opacity <= 0) {
+          c.y = -10;
+          c.x = Math.random() * canvas.width;
+          c.opacity = 1;
+        }
+      });
+    }
+
+    function iniciarConfeti() {
+      if (confetiActivo) return;
+      confetiActivo = true;
+      crearConfeti();
+      canvas.style.opacity = 1;
+      let duracion = 7000;
+      const inicio = performance.now();
+
+      function animarConfeti(tiempo) {
+        const progreso = tiempo - inicio;
+        if (progreso < duracion) {
+          dibujarConfeti();
+          requestAnimationFrame(animarConfeti);
+        } else {
+          canvas.style.opacity = 0;
+          setTimeout(() => {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            confetiActivo = false;
+          }, 3000);
+        }
+      }
+      animarConfeti(inicio);
+    }
+
+    function capitalizar(texto) {
+      return texto.charAt(0).toUpperCase() + texto.slice(1).toLowerCase();
+    }
+
+    function agregarDeuda() {
+      const nombreInput = document.getElementById('nombreDeuda');
+      const metaInput = document.getElementById('metaDeuda');
+      let nombre = nombreInput.value.trim();
+      const meta = parseFloat(metaInput.value);
+      if (!nombre || isNaN(meta) || meta <= 0) return;
+
+      nombre = capitalizar(nombre);
+      nombreInput.value = '';
+      metaInput.value = '';
+
+      const deudaDiv = document.createElement('div');
+      deudaDiv.classList.add('deuda');
+      deudaDiv.innerHTML = `
+        <div class="thermometer">
+          <div class="fill"></div>
+        </div>
+        <div class="nombre-deuda">${nombre}</div>
+        <div class="goal">$${meta.toLocaleString()} restantes</div>
+        <input type="number" placeholder="Abono ($)" class="abono-input">
+        <button class="abono-btn">Abonar</button>
+        <div class="felicitaciones">🎉 ¡Deuda pagada! 🎉</div>
+        <div class="historial">
+          <h4>Historial de abonos</h4>
+          <div class="historial-list"></div>
+        </div>
+      `;
+      deudaContainer.appendChild(deudaDiv);
+
+      const fill = deudaDiv.querySelector('.fill');
+      const goal = deudaDiv.querySelector('.goal');
+      const abonoInput = deudaDiv.querySelector('.abono-input');
+      const abonoBtn = deudaDiv.querySelector('.abono-btn');
+      const felicitaciones = deudaDiv.querySelector('.felicitaciones');
+      const nombreDeuda = deudaDiv.querySelector('.nombre-deuda');
+      const termometro = deudaDiv.querySelector('.thermometer');
+      const historialList = deudaDiv.querySelector('.historial-list');
+
+      let restante = meta;
+      let historial = [];
+
+      abonoBtn.addEventListener('click', () => {
+        const abono = parseFloat(abonoInput.value);
+        if (!isNaN(abono) && abono > 0) {
+          restante -= abono;
+          if (restante < 0) restante = 0;
+          const porcentaje = Math.min(((meta - restante) / meta) * 100, 100);
+          fill.style.height = porcentaje + '%';
+          goal.textContent = `$${restante.toLocaleString()} restantes`;
+          abonoInput.value = '';
+
+          const fecha = new Date().toLocaleString();
+          const entry = document.createElement('div');
+          entry.classList.add('historial-entry');
+          entry.textContent = `${fecha} — Abono: $${abono.toLocaleString()}`;
+          historialList.prepend(entry);
+          historial.push({ fecha, abono });
+
+          if (porcentaje >= 100) {
+            felicitaciones.style.display = 'block';
+            iniciarConfeti();
+            termometro.style.transform = 'translateY(-600px) rotate(-20deg)';
+            setTimeout(() => {
+              nombreDeuda.classList.add('nombre-destruido');
+              setTimeout(() => {
+                registrarDeudaSuperada(nombre, historial);
+                deudaDiv.remove();
+              }, 1500);
+            }, 1500);
+          }
+        }
+      });
+    }
+
+    function registrarDeudaSuperada(nombre, historial) {
+      const div = document.createElement('div');
+      div.classList.add('deuda-superada');
+      div.innerHTML = `<strong>${nombre}</strong><br>`;
+      historial.forEach(h => {
+        const p = document.createElement('p');
+        p.textContent = `${h.fecha} — Abono: $${h.abono.toLocaleString()}`;
+        div.appendChild(p);
+      });
+      listaSuperadas.prepend(div);
+    }
+
+    function mostrarDeudasSuperadas() {
+      seccionSuperadas.style.display = seccionSuperadas.style.display === 'none' ? 'block' : 'none';
+    }
   </script>
 </body>
-</html>
+</html> 
